@@ -1,5 +1,5 @@
 [package]
-name = "mutsuki-plugin-bot-adapter-qqbot"
+name = "mutsuki-bot-service-host-integration"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,17 +7,12 @@ license.workspace = true
 [dependencies]
 mutsuki-runtime-contracts.workspace = true
 mutsuki-runtime-core.workspace = true
-mutsuki-runtime-sdk.workspace = true
-mutsuki-bot-protocol.workspace = true
+mutsuki-service-runtime.workspace = true
+mutsuki-plugin-bot-adapter-qqbot.workspace = true
 fastrand.workspace = true
 futures-util.workspace = true
-html-escape.workspace = true
 reqwest.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
-time.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true
-url.workspace = true
