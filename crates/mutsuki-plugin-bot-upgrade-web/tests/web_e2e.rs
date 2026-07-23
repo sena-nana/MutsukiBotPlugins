@@ -1,11 +1,12 @@
-//! overview.summary WebHost E2E.
+//! upgrade.* WebHost E2E with fixture remote head provider.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use mutsuki_plugin_bot_control_web::{ControlRpcCaller, FixtureControlHandler};
-use mutsuki_plugin_bot_overview_web::{OverviewWebExtension, materialize_frontend_assets};
+use mutsuki_plugin_bot_upgrade_web::UpgradeWebExtension;
+use mutsuki_plugin_catalog::FixtureRemoteHeadProvider;
 use mutsuki_web_host::{MinimalWebApplication, MutsukiWebHost, WebHost};
 use mutsuki_web_protocol::{
     DeploymentMode, RpcRequest, WEB_PROTOCOL_VERSION, WebApplicationDescriptor, WebShellAssets,
@@ -14,26 +15,40 @@ use mutsuki_web_protocol::{
 use serde_json::json;
 use uuid::Uuid;
 
-async fn start(fail_statistics: bool) -> MutsukiWebHost {
-    let assets_dir = tempfile::tempdir().unwrap();
+async fn start() -> MutsukiWebHost {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let release_set = root
+        .join("..")
+        .join("mutsuki-plugin-catalog")
+        .join("tests")
+        .join("fixtures")
+        .join("release-set.toml");
+    let remote = Arc::new(
+        FixtureRemoteHeadProvider::default()
+            .with_head(
+                "https://github.com/sena-nana/MutsukiCore.git",
+                "bbbb2222cccc3333dddd4444",
+            )
+            .with_head(
+                "https://github.com/sena-nana/MutsukiBotPlugins.git",
+                "cccc3333dddd4444eeee5555",
+            ),
+    );
+    let extension = UpgradeWebExtension::new(&release_set)
+        .unwrap()
+        .with_remote_provider(remote);
     let shell_dir = tempfile::tempdir().unwrap();
-    let assets = materialize_frontend_assets(assets_dir.path()).unwrap();
-    let mut fixture = FixtureControlHandler::default();
-    fixture.fail_statistics = fail_statistics;
-    let extension =
-        OverviewWebExtension::new(ControlRpcCaller::new(Arc::new(fixture), "local-dev"))
-            .with_frontend_assets(&assets);
     let mut host = MutsukiWebHost::builder()
         .application(MinimalWebApplication::new(
             WebApplicationDescriptor {
-                id: "mutsuki.bot.overview".into(),
-                name: "Overview".into(),
+                id: "mutsuki.bot.upgrade".into(),
+                name: "Auto Upgrade".into(),
                 version: "0.1.0".into(),
                 brand: Some("Mutsuki".into()),
                 theme: Some("lilia".into()),
             },
             WebShellAssets {
-                root_dir: assets,
+                root_dir: shell_dir.path().to_path_buf(),
                 index_file: "index.html".into(),
                 import_map: Default::default(),
             },
@@ -46,18 +61,46 @@ async fn start(fail_statistics: bool) -> MutsukiWebHost {
         .build()
         .unwrap();
     host.start().await.unwrap();
-    std::mem::forget(assets_dir);
     std::mem::forget(shell_dir);
     host
 }
 
-async fn ws_rpc(addr: &str, method: &str) -> Result<serde_json::Value, String> {
+#[tokio::test]
+async fn upgrade_check_and_plan_use_fixture_remote() {
+    let mut host = start().await;
+    let addr = host.listen_addr().unwrap().to_string();
+
+    let check = ws_rpc(&addr, "check", json!({})).await.unwrap();
+    assert_eq!(check["release_set"], "mutsuki-0.1-alpha-3");
+    assert!(check["modules"].as_array().unwrap().len() >= 2);
+    assert!(check["update_count"].as_u64().unwrap() >= 1);
+
+    let plan = ws_rpc(
+        &addr,
+        "plan",
+        json!({"module_id": "core", "target_revision": "bbbb2222cccc3333dddd4444"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(plan["module_id"], "core");
+    assert!(plan["plan"]["steps"].as_array().unwrap().len() >= 4);
+    assert_eq!(plan["reload"]["method"], "plugin_reload");
+
+    host.stop().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+}
+
+async fn ws_rpc(
+    addr: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     use tokio_tungstenite::{connect_async, tungstenite::Message};
     let (mut ws, _) = connect_async(format!("ws://{addr}/ws")).await.expect("ws");
     ws.send(Message::Text(
         serde_json::to_string(&WireMessage::Hello {
             protocol_version: WEB_PROTOCOL_VERSION.into(),
-            capabilities: vec![],
+            capabilities: vec!["runtime.read".into()],
             auth_token: Some("local-dev".into()),
         })
         .unwrap()
@@ -76,9 +119,9 @@ async fn ws_rpc(addr: &str, method: &str) -> Result<serde_json::Value, String> {
     ws.send(Message::Text(
         serde_json::to_string(&WireMessage::Rpc(RpcRequest {
             id,
-            namespace: "overview".into(),
+            namespace: "upgrade".into(),
             method: method.into(),
-            params: json!({}),
+            params,
         }))
         .unwrap()
         .into(),
@@ -95,33 +138,4 @@ async fn ws_rpc(addr: &str, method: &str) -> Result<serde_json::Value, String> {
         },
         other => panic!("unexpected {other:?}"),
     }
-}
-
-#[tokio::test]
-async fn overview_summary() {
-    let mut host = start(false).await;
-    let addr = host.listen_addr().unwrap().to_string();
-    let summary = ws_rpc(&addr, "summary").await.unwrap();
-    assert_eq!(summary["service"]["instance_id"], "demo");
-    assert_eq!(summary["counts"]["runners"], 1);
-    assert_eq!(summary["counts"]["tasks"]["running"], 2);
-    assert!(
-        summary["plugins"]["plugins"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|p| p["plugin_id"] == "demo.plugin")
-    );
-    host.stop().await.unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-}
-
-#[tokio::test]
-async fn overview_summary_without_core_statistics() {
-    let mut host = start(true).await;
-    let addr = host.listen_addr().unwrap().to_string();
-    let summary = ws_rpc(&addr, "summary").await.unwrap();
-    assert!(summary["counts"]["tasks"].is_null());
-    host.stop().await.unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
 }

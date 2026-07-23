@@ -1,12 +1,12 @@
 [package]
-name = "mutsuki-plugin-bot-overview-web"
+name = "mutsuki-plugin-bot-control-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Web overview console: system status, runtime structure, task/runner counts, and uptime."
+description = "Web control proxy: ServiceHost ControlMethod as control.* RPC with capability gating."
 
 [dependencies]
-mutsuki-plugin-bot-control-web = { workspace = true }
+mutsuki-service-control = { workspace = true }
 mutsuki-web-protocol = { workspace = true }
 mutsuki-web-extension = { workspace = true }
 serde = { workspace = true }
@@ -16,7 +16,6 @@ futures-executor = "0.3"
 
 [dev-dependencies]
 mutsuki-web-host = { workspace = true }
-mutsuki-web-bridge = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 uuid = { version = "1", features = ["v4"] }
